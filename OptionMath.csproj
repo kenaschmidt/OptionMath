@@ -6,4 +6,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Reference Include="TradingCalendar">
+      <HintPath>..\TradingCalendar\bin\Release\net6.0\TradingCalendar.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
 </Project>
