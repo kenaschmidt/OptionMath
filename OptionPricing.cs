@@ -300,6 +300,18 @@ namespace OptionMath
                 return _CalculateAmericanPutOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent: dividendYieldPercent);
         }
 
+        /// <summary>
+        /// Optimized internal overload that computes European option price from pre-calculated Black-Scholes intermediates.
+        /// Avoids redundant d1/d2/N() calculations when used alongside Greek computations.
+        /// </summary>
+        internal static double EuropeanOptionPrice(OptionType optionType, BlackScholesIntermediates bs)
+        {
+            if (optionType == OptionType.Call)
+                return bs.S * bs.expNegQT * bs.Nd1 - bs.K * bs.expNegRT * bs.Nd2;
+            else
+                return bs.K * bs.expNegRT * bs.NNegd2 - bs.S * bs.expNegQT * bs.NNegd1;
+        }
+
         internal static double _CalculateEuroCallOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, double dividendYield = 0)
         {
             // Generalized BSM: uses cost-of-carry b = r - q (Haug, Section 1.1.6)
@@ -441,57 +453,67 @@ namespace OptionMath
         /// <exception cref="ApplicationException">If the iterative deduction cannot determine IV within the acceptable margin of error</exception>
         public static double ImpliedVolatility(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double optionPrice, double dividendYieldPercent = 0)
         {
-            // Initial guess for implied volatility
-            double volatilityGuess = 1.00;
-            double step = 1.00;
+            double S = underlyingPrice;
+            double K = optionStrikePrice;
+            double T = timeToExpiration;
+            double r = riskFreeRatePercent;
+            double q = dividendYieldPercent;
+            double target = optionPrice;
 
-            // Maximum number of iterations
-            int maxIterations = 100;
+            // Brenner-Subrahmanyam initial guess: σ₀ = √(2π/T) * (price/S)
+            double sigma = Math.Sqrt(2.0 * Math.PI / T) * (target / S);
+            sigma = Math.Max(0.01, Math.Min(sigma, 5.0));
 
-            // Tolerance for convergence
-            double tolerance = 0.01;
+            // Newton-Raphson iteration (typically converges in 3-8 iterations)
+            const int maxNRIterations = 50;
+            const double tolerance = 1e-10;
 
-            // Iteratively solve for the implied volatility
-
-            double guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess, dividendYieldPercent);
-            double guessPrice_prior = 0;
-
-            int iterations = 0;
-
-            while (Math.Abs(guessPrice - optionPrice) > tolerance && iterations < maxIterations)
+            for (int i = 0; i < maxNRIterations; i++)
             {
+                var bs = new BlackScholesIntermediates(S, K, T, r, sigma, q);
 
-                // If the calculated price is too low, raise the IV.  If it is too high, lower.
+                double price = EuropeanOptionPrice(optionType, bs);
+                double diff = price - target;
 
-                if (guessPrice < optionPrice)
-                {
-                    volatilityGuess += step;
-                }
+                if (Math.Abs(diff) < tolerance)
+                    return sigma;
+
+                // Vega (raw, not divided by 100): S * e^(-qT) * n(d1) * √T
+                double vegaRaw = bs.S * bs.expNegQT * bs.nd1 * bs.sqrtT;
+
+                if (vegaRaw < 1e-20)
+                    break; // Vega too small, NR will diverge - fall back to bisection
+
+                double sigmaNew = sigma - diff / vegaRaw;
+
+                if (sigmaNew <= 0.0 || sigmaNew > 10.0 || double.IsNaN(sigmaNew))
+                    break; // NR diverging - fall back to bisection
+
+                sigma = sigmaNew;
+            }
+
+            // Bisection fallback for edge cases where Newton-Raphson diverges
+            double lo = 0.0001;
+            double hi = 5.0;
+            const int maxBisectionIterations = 100;
+            const double bisectionTolerance = 1e-10;
+
+            for (int i = 0; i < maxBisectionIterations; i++)
+            {
+                double mid = (lo + hi) / 2.0;
+                double price = EuropeanOptionPrice(optionType, S, K, T, r, mid, q);
+                double diff = price - target;
+
+                if (Math.Abs(diff) < bisectionTolerance || (hi - lo) < bisectionTolerance)
+                    return mid;
+
+                if (diff < 0)
+                    lo = mid;
                 else
-                {
-                    step /= 2.0;
-                    volatilityGuess -= step;
-                }
-
-                guessPrice_prior = guessPrice;
-
-                guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess, dividendYieldPercent);
-
-                if (guessPrice == guessPrice_prior)
-                {
-                    // Values will not converge, likely because the option is deep ITM and very short TTE.  Return tiny value (IV of 0 results in infinity calculations)
-                    return 0.000000000000001;
-                }
-
-                iterations++;
+                    hi = mid;
             }
 
-            if (iterations == maxIterations)
-            {
-                throw new ApplicationException("*** ERROR: Implied volatility did not converge ***");
-            }
-
-            return volatilityGuess;
+            throw new ApplicationException("*** ERROR: Implied volatility did not converge ***");
         }
 
         /// <summary>
@@ -931,6 +953,7 @@ namespace OptionMath
         {
             double oneDay = 1.0 / dayCountConvention;
 
+            // Finite-difference fallback for very short expiration where analytical formula is unstable
             if (timeToExpiration <= oneDay)
             {
                 double cDelta1 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
@@ -939,10 +962,61 @@ namespace OptionMath
                 return (cDelta2 - cDelta1);
             }
 
-            double delta1 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double delta2 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            // Haug Section 2.5: Analytical Charm (Delta Bleed)
+            double S = underlyingPrice;
+            double K = optionStrikePrice;
+            double T = timeToExpiration;
+            double r = riskFreeRatePercent;
+            double v = volatilityPercent;
+            double q = dividendYieldPercent;
+            double b = r - q;
 
-            return (delta2 - delta1);
+            double sqrtT = Math.Sqrt(T);
+            double vSqrtT = v * sqrtT;
+            double d_1 = d1(S, K, T, r, v, q);
+            double d_2 = d_1 - vSqrtT;
+            double expNegQT = Math.Exp(-q * T);
+            double nd1 = n(d_1);
+
+            double commonTerm = nd1 * (2.0 * b * T - d_2 * vSqrtT) / (2.0 * T * vSqrtT);
+
+            // charmAnnual = dDelta/dT
+            // Call: dDelta/dT = e^(-qT) * [commonTerm - q*N(d1)]
+            // Put:  dDelta/dT = e^(-qT) * [commonTerm + q*N(-d1)]
+            // Output = -dDelta/dT / dayCount (negative because time remaining decreases)
+            double charmAnnual;
+            if (optionType == OptionType.Call)
+                charmAnnual = expNegQT * (commonTerm - q * N(d_1));
+            else
+                charmAnnual = expNegQT * (commonTerm + q * N(-d_1));
+
+            return -charmAnnual / dayCountConvention;
+        }
+
+        /// <summary>
+        /// Optimized internal overload that uses pre-calculated Black-Scholes intermediates
+        /// </summary>
+        internal static double Charm(OptionType optionType, BlackScholesIntermediates bs, int dayCountConvention = 252)
+        {
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (bs.T <= oneDay)
+            {
+                // Fallback to standalone finite-difference for very short expiration
+                return Charm(bs.S, optionType, bs.K, bs.T, bs.v, bs.r, bs.q, dayCountConvention);
+            }
+
+            // Haug Section 2.5: Analytical Charm
+            double b = bs.r - bs.q;
+            double commonTerm = bs.nd1 * (2.0 * b * bs.T - bs.d2 * bs.vSqrtT) / (2.0 * bs.T * bs.vSqrtT);
+
+            double charmAnnual;
+            if (optionType == OptionType.Call)
+                charmAnnual = bs.expNegQT * (commonTerm - bs.q * bs.Nd1);
+            else
+                charmAnnual = bs.expNegQT * (commonTerm + bs.q * bs.NNegd1);
+
+            return -charmAnnual / dayCountConvention;
         }
 
         /// <summary>
@@ -1032,16 +1106,57 @@ namespace OptionMath
         {
             double oneDay = 1.0 / dayCountConvention;
 
+            // Finite-difference fallback for very short expiration where analytical formula is unstable
             if (timeToExpiration <= oneDay)
             {
                 double cVega = Vega(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
                 return -cVega;
             }
 
-            double vega1 = Vega(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double vega2 = Vega(underlyingPrice, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            // Haug Section 2.5: Analytical Veta
+            double S = underlyingPrice;
+            double K = optionStrikePrice;
+            double T = timeToExpiration;
+            double r = riskFreeRatePercent;
+            double v = volatilityPercent;
+            double q = dividendYieldPercent;
+            double b = r - q;
 
-            return (vega2 - vega1);
+            double sqrtT = Math.Sqrt(T);
+            double vSqrtT = v * sqrtT;
+            double d_1 = d1(S, K, T, r, v, q);
+            double d_2 = d_1 - vSqrtT;
+            double expNegQT = Math.Exp(-q * T);
+            double nd1 = n(d_1);
+
+            // vetaAnnual = dVega_raw/dT = -S*e^(-qT)*n(d1)*√T * [q - 1/(2T) + d1*(2bT-d2v√T)/(2Tv√T)]
+            double vetaAnnual = -S * expNegQT * nd1 * sqrtT *
+                (q - 1.0 / (2.0 * T) + d_1 * (2.0 * b * T - d_2 * vSqrtT) / (2.0 * T * vSqrtT));
+
+            // Divide by dayCountConvention for per-day, and by 100 for per-1%-point Vega scaling
+            return -vetaAnnual / (dayCountConvention * 100.0);
+        }
+
+        /// <summary>
+        /// Optimized internal overload that uses pre-calculated Black-Scholes intermediates
+        /// </summary>
+        internal static double Veta(BlackScholesIntermediates bs, int dayCountConvention = 252)
+        {
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (bs.T <= oneDay)
+            {
+                // Fallback to standalone finite-difference for very short expiration
+                return Veta(bs.S, bs.K, bs.T, bs.v, bs.r, bs.q, dayCountConvention);
+            }
+
+            // Haug Section 2.5: Analytical Veta
+            double b = bs.r - bs.q;
+
+            double vetaAnnual = -bs.S * bs.expNegQT * bs.nd1 * bs.sqrtT *
+                (bs.q - 1.0 / (2.0 * bs.T) + bs.d1 * (2.0 * b * bs.T - bs.d2 * bs.vSqrtT) / (2.0 * bs.T * bs.vSqrtT));
+
+            return -vetaAnnual / (dayCountConvention * 100.0);
         }
 
         /// <summary>
@@ -1179,6 +1294,7 @@ namespace OptionMath
         {
             double oneDay = 1.0 / dayCountConvention;
 
+            // Finite-difference fallback for very short expiration where analytical formula is unstable
             if (timeToExpiration <= oneDay)
             {
                 double cGamma1 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
@@ -1187,10 +1303,48 @@ namespace OptionMath
                 return (cGamma2 - cGamma1);
             }
 
-            double gamma1 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double gamma2 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            // Haug Section 2.5: Analytical Color (Gamma Bleed)
+            double S = underlyingPrice;
+            double K = optionStrikePrice;
+            double T = timeToExpiration;
+            double r = riskFreeRatePercent;
+            double v = volatilityPercent;
+            double q = dividendYieldPercent;
+            double b = r - q;
 
-            return (gamma2 - gamma1);
+            double sqrtT = Math.Sqrt(T);
+            double vSqrtT = v * sqrtT;
+            double d_1 = d1(S, K, T, r, v, q);
+            double d_2 = d_1 - vSqrtT;
+            double expNegQT = Math.Exp(-q * T);
+            double nd1 = n(d_1);
+
+            double colorAnnual = -expNegQT * nd1 / (2.0 * S * T * vSqrtT) *
+                (2.0 * q * T + 1.0 + d_1 * (2.0 * b * T - d_2 * vSqrtT) / vSqrtT);
+
+            return -colorAnnual / dayCountConvention;
+        }
+
+        /// <summary>
+        /// Optimized internal overload that uses pre-calculated Black-Scholes intermediates
+        /// </summary>
+        internal static double Color(BlackScholesIntermediates bs, int dayCountConvention = 252)
+        {
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (bs.T <= oneDay)
+            {
+                // Fallback to standalone finite-difference for very short expiration
+                return Color(bs.S, bs.K, bs.T, bs.v, bs.r, bs.q, dayCountConvention);
+            }
+
+            // Haug Section 2.5: Analytical Color
+            double b = bs.r - bs.q;
+
+            double colorAnnual = -bs.expNegQT * bs.nd1 / (2.0 * bs.S * bs.T * bs.vSqrtT) *
+                (2.0 * bs.q * bs.T + 1.0 + bs.d1 * (2.0 * b * bs.T - bs.d2 * bs.vSqrtT) / bs.vSqrtT);
+
+            return -colorAnnual / dayCountConvention;
         }
 
         #endregion
@@ -1577,12 +1731,12 @@ namespace OptionMath
             return new SecondOrderGreeks
             {
                 Vanna = Vanna(bs),
-                Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
+                Charm = Charm(optionType, bs, dayCountConvention),
                 Vomma = Vomma(bs),
-                Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
+                Veta = Veta(bs, dayCountConvention),
                 Speed = Speed(bs),
                 Zomma = Zomma(bs),
-                Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention)
+                Color = Color(bs, dayCountConvention)
             };
         }
 
@@ -1610,7 +1764,7 @@ namespace OptionMath
 
             return new CompleteGreeks
             {
-                Price = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent),
+                Price = EuropeanOptionPrice(optionType, bs),
                 FirstOrder = new FirstOrderGreeks
                 {
                     Delta = Delta(optionType, bs),
@@ -1622,12 +1776,12 @@ namespace OptionMath
                 SecondOrder = new SecondOrderGreeks
                 {
                     Vanna = Vanna(bs),
-                    Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
+                    Charm = Charm(optionType, bs, dayCountConvention),
                     Vomma = Vomma(bs),
-                    Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
+                    Veta = Veta(bs, dayCountConvention),
                     Speed = Speed(bs),
                     Zomma = Zomma(bs),
-                    Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention)
+                    Color = Color(bs, dayCountConvention)
                 }
             };
         }
