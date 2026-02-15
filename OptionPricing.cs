@@ -18,12 +18,6 @@ namespace OptionMath
         private static readonly double SQRT_2PI = Math.Sqrt(2 * Math.PI);
         private static readonly double INV_SQRT_2PI = 1.0 / SQRT_2PI;
 
-        /// <summary>
-        /// Default day count convention for options (252 trading days/year for equities)
-        /// BREAKING CHANGE: Changed from 365 to 252 for accuracy with equity options
-        /// </summary>
-        public static int DayCountStandard { get; set; } = 252;
-
         #region Time Calculation Helpers
 
         /// <summary>
@@ -235,31 +229,34 @@ namespace OptionMath
         /// <param name="instrument">Trading instrument specification (e.g., TradingInstruments.EquityOption, TradingInstruments.SPXNonExpiration)</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
+        /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal (default 0)</param>
         /// <returns>Option price</returns>
         public static double EuropeanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice,
             DateTime currentTime, DateTime expirationDate, TradingCalendar.TradingCalendar.TradingInstrument instrument,
-            double riskFreeRatePercent, double volatilityPercent)
+            double riskFreeRatePercent, double volatilityPercent, double dividendYieldPercent = 0)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+            return EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
         }
 
         /// <summary>
-        /// Calculates the price of a European-style option (no early exercise)
+        /// Calculates the price of a European-style option using the generalized Black-Scholes-Merton formula.
+        /// Supports continuous dividend yield per Merton (1973).
         /// </summary>
         /// <param name="optionType">Put or Call</param>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionStrikePrice">Strike price of the option</param>
         /// <param name="timeToExpiration">Time to expiration expressed as a fraction of a trading year</param>
-        /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
+        /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
-        /// <returns></returns>
-        public static double EuropeanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double volatilityPercent)
+        /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal (default 0)</param>
+        /// <returns>Option price</returns>
+        public static double EuropeanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double volatilityPercent, double dividendYieldPercent = 0)
         {
             if (optionType == OptionType.Call)
-                return _CalculateEuroCallOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+                return _CalculateEuroCallOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
             else
-                return _CalculateEuroPutOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+                return _CalculateEuroPutOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
         }
 
         /// <summary>
@@ -273,17 +270,19 @@ namespace OptionMath
         /// <param name="instrument">Trading instrument specification (e.g., TradingInstruments.EquityOption, TradingInstruments.SPXNonExpiration)</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
+        /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal (default 0)</param>
         /// <returns>Option price</returns>
         public static double AmericanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice,
             DateTime currentTime, DateTime expirationDate, TradingCalendar.TradingCalendar.TradingInstrument instrument,
-            double riskFreeRatePercent, double volatilityPercent)
+            double riskFreeRatePercent, double volatilityPercent, double dividendYieldPercent = 0)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return AmericanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+            return AmericanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
         }
 
         /// <summary>
-        /// Calculates the price of an American-style option (early exercise allowed)
+        /// Calculates the price of an American-style option (early exercise allowed) using a CRR binomial tree.
+        /// Supports continuous dividend yield.
         /// </summary>
         /// <param name="optionType">Put or Call</param>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
@@ -291,60 +290,63 @@ namespace OptionMath
         /// <param name="timeToExpiration">Time to expiration expressed as a fraction of a trading year</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
-        /// <returns></returns>
-        public static double AmericanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double volatilityPercent)
+        /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal (default 0)</param>
+        /// <returns>Option price</returns>
+        public static double AmericanOptionPrice(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double volatilityPercent, double dividendYieldPercent = 0)
         {
             if (optionType == OptionType.Call)
-                return _CalculateAmericanCallOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+                return _CalculateAmericanCallOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent: dividendYieldPercent);
             else
-                return _CalculateAmericanPutOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent);
+                return _CalculateAmericanPutOptionPrice(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent: dividendYieldPercent);
         }
 
-        internal static double _CalculateEuroCallOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility)
+        internal static double _CalculateEuroCallOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, double dividendYield = 0)
         {
-            // Optimized: use volatility*volatility instead of Math.Pow(volatility, 2)
+            // Generalized BSM: uses cost-of-carry b = r - q (Haug, Section 1.1.6)
+            // c = S * e^((b-r)T) * N(d1) - X * e^(-rT) * N(d2) where b = r - q → e^((b-r)T) = e^(-qT)
             double volatility2 = volatility * volatility;
             double sqrtT = Math.Sqrt(timeToExpiration);
+            double b = riskFreeRate - dividendYield;
 
             double d1 = (Math.Log(underlyingPrice / strikePrice)
-                        + (riskFreeRate + volatility2 / 2) * timeToExpiration)
+                        + (b + volatility2 / 2) * timeToExpiration)
                         / (volatility * sqrtT);
 
             double d2 = d1 - volatility * sqrtT;
 
-            double callPrice = underlyingPrice * N(d1)
+            double callPrice = underlyingPrice * Math.Exp(-dividendYield * timeToExpiration) * N(d1)
                              - strikePrice * Math.Exp(-riskFreeRate * timeToExpiration) * N(d2);
 
             return callPrice;
         }
-        internal static double _CalculateEuroPutOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility)
+        internal static double _CalculateEuroPutOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, double dividendYield = 0)
         {
-            // Optimized: cache sqrt(T) to avoid calculating twice
+            // Generalized BSM: p = X * e^(-rT) * N(-d2) - S * e^((b-r)T) * N(-d1) where b = r - q
             double volatility2 = volatility * volatility;
             double sqrtT = Math.Sqrt(timeToExpiration);
+            double b = riskFreeRate - dividendYield;
 
-            double d1 = (Math.Log(underlyingPrice / strikePrice) + (riskFreeRate + volatility2 / 2.0) * timeToExpiration) / (volatility * sqrtT);
+            double d1 = (Math.Log(underlyingPrice / strikePrice) + (b + volatility2 / 2.0) * timeToExpiration) / (volatility * sqrtT);
             double d2 = d1 - volatility * sqrtT;
 
             double putOptionPrice = strikePrice * Math.Exp(-riskFreeRate * timeToExpiration) * N(-d2)
-                - underlyingPrice * N(-d1);
+                - underlyingPrice * Math.Exp(-dividendYield * timeToExpiration) * N(-d1);
 
             return putOptionPrice;
         }
-        internal static double _CalculateAmericanCallOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, int numberOfSteps = 100)
+        internal static double _CalculateAmericanCallOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, int numberOfSteps = 100, double dividendYieldPercent = 0)
         {
             double deltaT = timeToExpiration / numberOfSteps;
             double up = Math.Exp(volatility * Math.Sqrt(deltaT));
             double down = 1.0 / up;
-            double pUp = (Math.Exp(riskFreeRate * deltaT) - down) / (up - down);
+            // CRR binomial tree with continuous dividend yield: use (r - q) for risk-neutral growth
+            double pUp = (Math.Exp((riskFreeRate - dividendYieldPercent) * deltaT) - down) / (up - down);
             double pDown = 1.0 - pUp;
-            // Optimized: calculate discount factor once instead of in every loop iteration
             double discountFactor = Math.Exp(-riskFreeRate * deltaT);
 
             double[] underlyingPrices = new double[numberOfSteps + 1];
             double[] optionValues = new double[numberOfSteps + 1];
 
-            // Optimized: use iterative multiplication instead of Math.Pow
             double upPower = Math.Pow(up, numberOfSteps);
             double downPower = 1.0;
             for (int i = 0; i <= numberOfSteps; i++)
@@ -367,20 +369,19 @@ namespace OptionMath
 
             return optionValues[0];
         }
-        internal static double _CalculateAmericanPutOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, int numberOfSteps = 100)
+        internal static double _CalculateAmericanPutOptionPrice(double underlyingPrice, double strikePrice, double timeToExpiration, double riskFreeRate, double volatility, int numberOfSteps = 100, double dividendYieldPercent = 0)
         {
             double deltaT = timeToExpiration / numberOfSteps;
             double up = Math.Exp(volatility * Math.Sqrt(deltaT));
             double down = 1.0 / up;
-            double pUp = (Math.Exp(riskFreeRate * deltaT) - down) / (up - down);
+            // CRR binomial tree with continuous dividend yield: use (r - q) for risk-neutral growth
+            double pUp = (Math.Exp((riskFreeRate - dividendYieldPercent) * deltaT) - down) / (up - down);
             double pDown = 1.0 - pUp;
-            // Optimized: calculate discount factor once instead of in every loop iteration
             double discountFactor = Math.Exp(-riskFreeRate * deltaT);
 
             double[] underlyingPrices = new double[numberOfSteps + 1];
             double[] optionValues = new double[numberOfSteps + 1];
 
-            // Optimized: use iterative multiplication instead of Math.Pow
             double upPower = Math.Pow(up, numberOfSteps);
             double downPower = 1.0;
             for (int i = 0; i <= numberOfSteps; i++)
@@ -419,24 +420,26 @@ namespace OptionMath
         /// <exception cref="ApplicationException">If the iterative deduction cannot determine IV within the acceptable margin of error</exception>
         public static double ImpliedVolatility(OptionType optionType, double underlyingPrice, double optionStrikePrice,
             DateTime currentTime, DateTime expirationDate, TradingCalendar.TradingCalendar.TradingInstrument instrument,
-            double riskFreeRatePercent, double optionPrice)
+            double riskFreeRatePercent, double optionPrice, double dividendYieldPercent = 0)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return ImpliedVolatility(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, optionPrice);
+            return ImpliedVolatility(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, optionPrice, dividendYieldPercent);
         }
 
         /// <summary>
-        /// Calculates the implied volatility of an option from a given price, using iterative deduction
+        /// Calculates the implied volatility of an option from a given price, using iterative deduction.
+        /// Supports continuous dividend yield.
         /// </summary>
         /// <param name="optionType">Put or Call</param>
-        /// <param name="underlyingPrice">>Current Spot price of the underlying instrument</param>
+        /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionStrikePrice">Strike price of the option</param>
         /// <param name="timeToExpiration">Time to expiration expressed as a fraction of a trading year</param>
-        /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
+        /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="optionPrice">Price of the option</param>
+        /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal (default 0)</param>
         /// <returns>Implied volatility percentage of the option expressed as a decimal</returns>
         /// <exception cref="ApplicationException">If the iterative deduction cannot determine IV within the acceptable margin of error</exception>
-        public static double ImpliedVolatility(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double optionPrice)
+        public static double ImpliedVolatility(OptionType optionType, double underlyingPrice, double optionStrikePrice, double timeToExpiration, double riskFreeRatePercent, double optionPrice, double dividendYieldPercent = 0)
         {
             // Initial guess for implied volatility
             double volatilityGuess = 1.00;
@@ -450,7 +453,7 @@ namespace OptionMath
 
             // Iteratively solve for the implied volatility
 
-            double guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess);
+            double guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess, dividendYieldPercent);
             double guessPrice_prior = 0;
 
             int iterations = 0;
@@ -472,7 +475,7 @@ namespace OptionMath
 
                 guessPrice_prior = guessPrice;
 
-                guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess);
+                guessPrice = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityGuess, dividendYieldPercent);
 
                 if (guessPrice == guessPrice_prior)
                 {
@@ -526,13 +529,17 @@ namespace OptionMath
         /// <exception cref="ArgumentException"></exception>
         public static double Delta(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
+            // Haug (2.1)/(2.2): Delta_call = e^(-qT) * N(d1), Delta_put = e^(-qT) * [N(d1) - 1]
+            double expNegQT = Math.Exp(-dividendYieldPercent * timeToExpiration);
+            double nd1 = N(d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent));
+
             if (optionType == OptionType.Call)
             {
-                return N(d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent));
+                return expNegQT * nd1;
             }
             else if (optionType == OptionType.Put)
             {
-                return N(d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent)) - 1;
+                return expNegQT * (nd1 - 1);
             }
             else
                 throw new ArgumentException();
@@ -543,7 +550,10 @@ namespace OptionMath
         /// </summary>
         internal static double Delta(OptionType optionType, BlackScholesIntermediates bs)
         {
-            return optionType == OptionType.Call ? bs.Nd1 : bs.Nd1 - 1;
+            // Haug (2.1)/(2.2): Delta = e^(-qT) * N(d1) for call, e^(-qT) * (N(d1) - 1) for put
+            return optionType == OptionType.Call
+                ? bs.expNegQT * bs.Nd1
+                : bs.expNegQT * (bs.Nd1 - 1);
         }
 
         /// <summary>
@@ -578,12 +588,14 @@ namespace OptionMath
         /// <returns>A value between 0.0 and 1.0</returns>
         public static double Gamma(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
+            // Haug (2.15): Gamma = e^(-qT) * n(d1) / (S * σ * √T)
             var T = timeToExpiration;
+            double expNegQT = Math.Exp(-dividendYieldPercent * T);
 
             var a = n(d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent));
             var b = underlyingPrice * volatilityPercent * Math.Sqrt(T);
 
-            return a / b;
+            return expNegQT * a / b;
         }
 
         /// <summary>
@@ -591,7 +603,8 @@ namespace OptionMath
         /// </summary>
         internal static double Gamma(BlackScholesIntermediates bs)
         {
-            return bs.nd1 / (bs.S * bs.v * bs.sqrtT);
+            // Haug (2.15): Gamma = e^(-qT) * n(d1) / (S * σ * √T)
+            return bs.expNegQT * bs.nd1 / (bs.S * bs.v * bs.sqrtT);
         }
 
         /// <summary>
@@ -727,14 +740,16 @@ namespace OptionMath
         /// <returns>A decimal value representing the expected change in option price per 1.00% change in implied volatility</returns>
         public static double Vega(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
-            // As defined on page 361
+            // Haug (2.25): Vega = S * e^(-qT) * n(d1) * √T
+            // Divided by 100 to express as change per 1 percentage point of volatility
 
             double So = underlyingPrice;
             double T = timeToExpiration;
+            double expNegQT = Math.Exp(-dividendYieldPercent * T);
 
             double d_1 = d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
 
-            return (So * Math.Sqrt(T) * n(d_1)) / 100;
+            return (So * expNegQT * Math.Sqrt(T) * n(d_1)) / 100;
         }
 
         /// <summary>
@@ -742,7 +757,8 @@ namespace OptionMath
         /// </summary>
         internal static double Vega(BlackScholesIntermediates bs)
         {
-            return (bs.S * bs.sqrtT * bs.nd1) / 100;
+            // Haug (2.25): Vega = S * e^(-qT) * n(d1) * √T / 100
+            return (bs.S * bs.expNegQT * bs.sqrtT * bs.nd1) / 100;
         }
 
         /// <summary>
@@ -780,10 +796,14 @@ namespace OptionMath
         /// <exception cref="NotImplementedException"></exception>
         public static double Rho(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
+            // Haug (2.45)/(2.47): Rho_call = T*X*e^(-rT)*N(d2), Rho_put = -T*X*e^(-rT)*N(-d2)
+            // Divided by 100 to express as change per 1 percentage point of interest rate (consistent with Vega convention)
             if (optionType == OptionType.Call)
-                return ((optionStrikePrice) * (timeToExpiration) * (Math.Exp((-riskFreeRatePercent * timeToExpiration)) * N(d2(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent))));
+                return optionStrikePrice * timeToExpiration * Math.Exp(-riskFreeRatePercent * timeToExpiration)
+                    * N(d2(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent)) / 100;
             else if (optionType == OptionType.Put)
-                return (-(optionStrikePrice) * (timeToExpiration) * (Math.Exp((-riskFreeRatePercent * timeToExpiration)) * N(-d2(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent))));
+                return -optionStrikePrice * timeToExpiration * Math.Exp(-riskFreeRatePercent * timeToExpiration)
+                    * N(-d2(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent)) / 100;
 
             else throw new ArgumentException();
         }
@@ -793,10 +813,11 @@ namespace OptionMath
         /// </summary>
         internal static double Rho(OptionType optionType, BlackScholesIntermediates bs)
         {
+            // Haug (2.45)/(2.47), divided by 100 for per-1%-point convention
             if (optionType == OptionType.Call)
-                return bs.K * bs.T * bs.expNegRT * bs.Nd2;
+                return bs.K * bs.T * bs.expNegRT * bs.Nd2 / 100;
             else // Put
-                return -bs.K * bs.T * bs.expNegRT * bs.NNegd2;
+                return -bs.K * bs.T * bs.expNegRT * bs.NNegd2 / 100;
         }
 
         /// <summary>
@@ -854,12 +875,12 @@ namespace OptionMath
         /// <returns>Vanna of an option expressed as a decimal</returns>
         public static double Vanna(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
-            // Optimized: use analytical formula instead of numerical differentiation
-            // Vanna = -n(d1) * d2 / v
+            // Haug (2.6): Vanna = -e^(-qT) * n(d1) * d2 / σ
+            double expNegQT = Math.Exp(-dividendYieldPercent * timeToExpiration);
             double d_1 = d1(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
             double d_2 = d2(underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
 
-            return -n(d_1) * d_2 / volatilityPercent;
+            return -expNegQT * n(d_1) * d_2 / volatilityPercent;
         }
 
         /// <summary>
@@ -867,7 +888,8 @@ namespace OptionMath
         /// </summary>
         internal static double Vanna(BlackScholesIntermediates bs)
         {
-            return -bs.nd1 * bs.d2 / bs.v;
+            // Haug (2.6): Vanna = -e^(-qT) * n(d1) * d2 / σ
+            return -bs.expNegQT * bs.nd1 * bs.d2 / bs.v;
         }
 
         /// <summary>
@@ -1588,7 +1610,7 @@ namespace OptionMath
 
             return new CompleteGreeks
             {
-                Price = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent),
+                Price = EuropeanOptionPrice(optionType, underlyingPrice, optionStrikePrice, timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent),
                 FirstOrder = new FirstOrderGreeks
                 {
                     Delta = Delta(optionType, bs),
