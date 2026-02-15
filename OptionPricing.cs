@@ -41,8 +41,11 @@ namespace OptionMath
 
         #region Statistical Functions
 
-        // Cumulative distribution function for the standard normal distribution
-        internal static double N(double x)
+        /// <summary>
+        /// Cumulative distribution function for the standard normal distribution N(x)
+        /// Optimized with x*x replacement and pre-computed constants
+        /// </summary>
+        public static double N(double x)
         {
             double a1 = 0.31938153;
             double a2 = -0.356563782;
@@ -63,10 +66,13 @@ namespace OptionMath
             return x < 0 ? 1 - y : y;
         }
 
-        // Standardized Normal Density Function n(x)
-        internal static double n(double x)
+        /// <summary>
+        /// Standardized Normal Density Function n(x)
+        /// As defined on page 353 of "The Complete Guide to Option Pricing Formulas"
+        /// Optimized with x*x replacement and pre-computed constant
+        /// </summary>
+        public static double n(double x)
         {
-            // As defined on page 353
             // Optimized: use x*x instead of Math.Pow(x, 2) and pre-computed constant
             double x2 = x * x;
             return INV_SQRT_2PI * Math.Exp(-x2 / 2);
