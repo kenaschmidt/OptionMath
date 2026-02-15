@@ -12,19 +12,17 @@ namespace OptionMath
         Call = 1
     }
 
-    public enum OptionTradingHours
-    {
-        MarketHours = 0,
-        TwentyFourHours = 1
-    }
-
     public static class OptionPricing
     {
         // Mathematical constants to eliminate repeated calculations
         private static readonly double SQRT_2PI = Math.Sqrt(2 * Math.PI);
         private static readonly double INV_SQRT_2PI = 1.0 / SQRT_2PI;
 
-        public static int DayCountStandard { get; set; } = 365;
+        /// <summary>
+        /// Default day count convention for options (252 trading days/year for equities)
+        /// BREAKING CHANGE: Changed from 365 to 252 for accuracy with equity options
+        /// </summary>
+        public static int DayCountStandard { get; set; } = 252;
 
         #region Time Calculation Helpers
 
@@ -35,6 +33,35 @@ namespace OptionMath
         private static double CalculateTimeToExpiration(DateTime currentTime, DateTime expirationDate, TradingCalendar.TradingCalendar.TradingInstrument instrument)
         {
             return TradingCalendar.TradingCalendar.OptionYearsToExpiration(currentTime, expirationDate, instrument);
+        }
+
+        /// <summary>
+        /// Gets the appropriate day count convention for the trading instrument
+        /// This determines how Greeks are normalized to "per day" values
+        /// </summary>
+        /// <param name="instrument">Trading instrument</param>
+        /// <returns>Days per year for the instrument (252 for equities, 365 for FX, etc.)</returns>
+        private static int GetDayCountConvention(TradingCalendar.TradingCalendar.TradingInstrument instrument)
+        {
+            // Check instrument name/type to determine convention
+            // This matches TradingCalendar's approach
+            string instrumentName = instrument.ToString().ToLower();
+
+            // FX options use calendar days
+            if (instrumentName.Contains("fx") || instrumentName.Contains("currency") || instrumentName.Contains("forex"))
+            {
+                return 365;
+            }
+
+            // Interest rate products may use 360 or 365
+            if (instrumentName.Contains("rate") || instrumentName.Contains("bond"))
+            {
+                return 360;  // Common for money market
+            }
+
+            // Default: Equity options use 252 trading days (US standard)
+            // This includes: equity options, index options, ETF options
+            return 252;
         }
 
         #endregion
@@ -569,6 +596,7 @@ namespace OptionMath
 
         /// <summary>
         /// Calculates the Theta of an option using TradingCalendar's time calculations.
+        /// Uses instrument-specific day count convention (252 for equities, 365 for FX, etc.)
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -585,11 +613,13 @@ namespace OptionMath
             double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return Theta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            int dayCount = GetDayCountConvention(instrument);
+            return Theta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCount);
         }
 
         /// <summary>
         /// Calculates the Theta of an option - the change in option price due to change in time, expressed as a decimal value per 1 day of time.  Always negative for long options.
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accuracy
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -598,9 +628,10 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>A negative value representing the expected change in option price per 1 day of time</returns>
         /// <exception cref="ArgumentException"></exception>
-        public static double Theta(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
+        public static double Theta(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
             // As defined on page 353
 
@@ -619,7 +650,7 @@ namespace OptionMath
 
                 double ret = -(a1 / twoSqrtT) + c1 - b1;
 
-                return ret / DayCountStandard;
+                return ret / dayCountConvention;
             }
             else if (optionType == OptionType.Put)
             {
@@ -631,7 +662,7 @@ namespace OptionMath
 
                 double ret = -(a1 / twoSqrtT) - c1 + b1;
 
-                return ret / DayCountStandard;
+                return ret / dayCountConvention;
             }
             else
                 throw new ArgumentException();
@@ -640,7 +671,7 @@ namespace OptionMath
         /// <summary>
         /// Optimized internal overload that uses pre-calculated Black-Scholes intermediates
         /// </summary>
-        internal static double Theta(OptionType optionType, BlackScholesIntermediates bs)
+        internal static double Theta(OptionType optionType, BlackScholesIntermediates bs, int dayCountConvention = 252)
         {
             double twoSqrtT = 2 * bs.sqrtT;
 
@@ -651,7 +682,7 @@ namespace OptionMath
                 double b1 = bs.r * bs.K * bs.expNegRT * bs.Nd2;
 
                 double ret = -(a1 / twoSqrtT) + c1 - b1;
-                return ret / DayCountStandard;
+                return ret / dayCountConvention;
             }
             else // Put
             {
@@ -660,7 +691,7 @@ namespace OptionMath
                 double b1 = bs.r * bs.K * bs.expNegRT * bs.NNegd2;
 
                 double ret = -(a1 / twoSqrtT) - c1 + b1;
-                return ret / DayCountStandard;
+                return ret / dayCountConvention;
             }
         }
 
@@ -857,11 +888,13 @@ namespace OptionMath
             double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            int dayCount = GetDayCountConvention(instrument);
+            return Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCount);
         }
 
         /// <summary>
         /// Calculates the Charm of an option - the change in option Delta per 1.00 day in time.  Also known as dDelta/dTime (Delta Time Decay)
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accuracy
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -870,10 +903,13 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>Charm of an option expressed as a decimal value of delta, normalized to 1.0 day</returns>
-        public static double Charm(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
+        public static double Charm(double underlyingPrice, OptionType optionType, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
-            if (timeToExpiration <= (1.0 / DayCountStandard))
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (timeToExpiration <= oneDay)
             {
                 double cDelta1 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
                 double cDelta2 = Delta(underlyingPrice, optionType, optionStrikePrice, 0, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
@@ -882,7 +918,7 @@ namespace OptionMath
             }
 
             double delta1 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double delta2 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration - (1.0 / DayCountStandard), volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            double delta2 = Delta(underlyingPrice, optionType, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
 
             return (delta2 - delta1);
         }
@@ -954,11 +990,13 @@ namespace OptionMath
             double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            int dayCount = GetDayCountConvention(instrument);
+            return Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCount);
         }
 
         /// <summary>
         /// Calculates the Veta for an option - the change in Vega per 1.0 day (Vega Time Decay)
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accuracy
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionStrikePrice">Strike price of the option</param>
@@ -966,17 +1004,20 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>The Veta of an option, expressed as a decimal</returns>
-        public static double Veta(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
+        public static double Veta(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
-            if (timeToExpiration <= (1.0 / DayCountStandard))
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (timeToExpiration <= oneDay)
             {
                 double cVega = Vega(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
                 return -cVega;
             }
 
             double vega1 = Vega(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double vega2 = Vega(underlyingPrice, optionStrikePrice, (timeToExpiration - (1.0 / DayCountStandard)), volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            double vega2 = Vega(underlyingPrice, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
 
             return (vega2 - vega1);
         }
@@ -1096,11 +1137,13 @@ namespace OptionMath
             double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
         {
             double timeToExpiration = CalculateTimeToExpiration(currentTime, expirationDate, instrument);
-            return Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            int dayCount = GetDayCountConvention(instrument);
+            return Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCount);
         }
 
         /// <summary>
         /// Calculates the Color of an option - the change in option Gamma per 1.0 day of time. (Gamma Time Decay)
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accuracy
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionStrikePrice">Strike price of the option</param>
@@ -1108,10 +1151,13 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentagee expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>The change in Gamma per 1.0 day passage of time, expressed as a decimal</returns>
-        public static double Color(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent)
+        public static double Color(double underlyingPrice, double optionStrikePrice, double timeToExpiration, double volatilityPercent, double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
-            if (timeToExpiration <= (1.0 / DayCountStandard))
+            double oneDay = 1.0 / dayCountConvention;
+
+            if (timeToExpiration <= oneDay)
             {
                 double cGamma1 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
                 double cGamma2 = Gamma(underlyingPrice, optionStrikePrice, 0.00001, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
@@ -1120,7 +1166,7 @@ namespace OptionMath
             }
 
             double gamma1 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
-            double gamma2 = Gamma(underlyingPrice, optionStrikePrice, (timeToExpiration - (1.0 / DayCountStandard)), volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
+            double gamma2 = Gamma(underlyingPrice, optionStrikePrice, timeToExpiration - oneDay, volatilityPercent, riskFreeRatePercent, dividendYieldPercent);
 
             return (gamma2 - gamma1);
         }
@@ -1455,6 +1501,7 @@ namespace OptionMath
         /// <summary>
         /// Efficiently calculates all first-order Greeks (Delta, Gamma, Theta, Vega, Rho) in a single call.
         /// This is 70-80% faster than calling each Greek function individually.
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accurate Theta calculation
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -1463,11 +1510,12 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>FirstOrderGreeks struct containing all first-order Greeks</returns>
         public static FirstOrderGreeks CalculateFirstOrderGreeks(
             double underlyingPrice, OptionType optionType, double optionStrikePrice,
             double timeToExpiration, double volatilityPercent,
-            double riskFreeRatePercent, double dividendYieldPercent)
+            double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
             var bs = new BlackScholesIntermediates(underlyingPrice, optionStrikePrice,
                 timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
@@ -1476,7 +1524,7 @@ namespace OptionMath
             {
                 Delta = Delta(optionType, bs),
                 Gamma = Gamma(bs),
-                Theta = Theta(optionType, bs),
+                Theta = Theta(optionType, bs, dayCountConvention),
                 Vega = Vega(bs),
                 Rho = Rho(optionType, bs)
             };
@@ -1485,6 +1533,7 @@ namespace OptionMath
         /// <summary>
         /// Efficiently calculates all second-order Greeks in a single call.
         /// This is 70-80% faster than calling each Greek function individually.
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accurate time-based Greeks
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -1493,11 +1542,12 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>SecondOrderGreeks struct containing all second-order Greeks</returns>
         public static SecondOrderGreeks CalculateSecondOrderGreeks(
             double underlyingPrice, OptionType optionType, double optionStrikePrice,
             double timeToExpiration, double volatilityPercent,
-            double riskFreeRatePercent, double dividendYieldPercent)
+            double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
             var bs = new BlackScholesIntermediates(underlyingPrice, optionStrikePrice,
                 timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
@@ -1505,18 +1555,19 @@ namespace OptionMath
             return new SecondOrderGreeks
             {
                 Vanna = Vanna(bs),
-                Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent),
+                Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
                 Vomma = Vomma(bs),
-                Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent),
+                Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
                 Speed = Speed(bs),
                 Zomma = Zomma(bs),
-                Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent)
+                Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention)
             };
         }
 
         /// <summary>
         /// Efficiently calculates option price and all Greeks (first and second order) in a single call.
         /// This is 85% faster than calling each function individually.
+        /// BREAKING CHANGE: Now requires dayCountConvention parameter for accurate time-based Greeks
         /// </summary>
         /// <param name="underlyingPrice">Current Spot price of the underlying instrument</param>
         /// <param name="optionType">Put or Call</param>
@@ -1525,11 +1576,12 @@ namespace OptionMath
         /// <param name="volatilityPercent">Volatility percentage expressed as a decimal</param>
         /// <param name="riskFreeRatePercent">Risk free interest rate percentage expressed as a decimal</param>
         /// <param name="dividendYieldPercent">Dividend yield percentage expressed as a decimal</param>
+        /// <param name="dayCountConvention">Days per year (252 for equities, 365 for FX, 360 for some bonds)</param>
         /// <returns>CompleteGreeks struct containing price and all Greeks</returns>
         public static CompleteGreeks CalculateAllGreeks(
             double underlyingPrice, OptionType optionType, double optionStrikePrice,
             double timeToExpiration, double volatilityPercent,
-            double riskFreeRatePercent, double dividendYieldPercent)
+            double riskFreeRatePercent, double dividendYieldPercent, int dayCountConvention = 252)
         {
             var bs = new BlackScholesIntermediates(underlyingPrice, optionStrikePrice,
                 timeToExpiration, riskFreeRatePercent, volatilityPercent, dividendYieldPercent);
@@ -1541,19 +1593,19 @@ namespace OptionMath
                 {
                     Delta = Delta(optionType, bs),
                     Gamma = Gamma(bs),
-                    Theta = Theta(optionType, bs),
+                    Theta = Theta(optionType, bs, dayCountConvention),
                     Vega = Vega(bs),
                     Rho = Rho(optionType, bs)
                 },
                 SecondOrder = new SecondOrderGreeks
                 {
                     Vanna = Vanna(bs),
-                    Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent),
+                    Charm = Charm(underlyingPrice, optionType, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
                     Vomma = Vomma(bs),
-                    Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent),
+                    Veta = Veta(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention),
                     Speed = Speed(bs),
                     Zomma = Zomma(bs),
-                    Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent)
+                    Color = Color(underlyingPrice, optionStrikePrice, timeToExpiration, volatilityPercent, riskFreeRatePercent, dividendYieldPercent, dayCountConvention)
                 }
             };
         }
